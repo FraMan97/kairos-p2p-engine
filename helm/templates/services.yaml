@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kairos-bootstrap
+spec:
+  ports:
+    - port: 8080
+      targetPort: {{ .Values.bootstrap.port }}
+  selector:
+    app: kairos-bootstrap
+  clusterIP: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kairos-node
+spec:
+  ports:
+    - port: 8080
+      targetPort: {{ .Values.nodes.port }}
+  selector:
+    app: kairos-node
+  clusterIP: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kairos-engine-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: {{ .Values.nodes.port }}
+  selector:
+    app: kairos-node

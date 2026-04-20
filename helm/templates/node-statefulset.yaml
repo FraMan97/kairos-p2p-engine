@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kairos-node
+spec:
+  serviceName: "kairos-node"
+  replicas: {{ .Values.nodes.replicas }}
+  selector:
+    matchLabels:
+      app: kairos-node
+  template:
+    metadata:
+      labels:
+        app: kairos-node
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - kairos-node
+                topologyKey: "kubernetes.io/hostname"
+      containers:
+        - name: node
+          image: {{ .Values.nodes.image }}
+          imagePullPolicy: {{ .Values.nodes.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.nodes.port }}
+          env:
+            - name: PORT
+              value: "{{ .Values.nodes.port }}"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: BOOTSTRAP_SERVERS
+              value: "{{ .Values.env.BOOTSTRAP_SERVERS }}"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ .Values.nodes.storage }}

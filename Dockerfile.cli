@@ -1,0 +1,13 @@
+FROM golang:1.24-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN go get google.golang.org/genproto/googleapis/rpc@v0.0.0-20240723171418-e6d459c13d2a google.golang.org/genproto/googleapis/api@v0.0.0-20240723171418-e6d459c13d2a
+RUN go mod tidy
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o k-cli ./cmd/k-cli/main.go
+
+FROM alpine:latest
+WORKDIR /root/
+COPY --from=builder /app/k-cli .
+ENTRYPOINT ["./k-cli"]

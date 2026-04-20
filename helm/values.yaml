@@ -1,0 +1,16 @@
+bootstrap:
+  image: kairos-bootstrap:latest
+  pullPolicy: IfNotPresent
+  replicas: 1
+  storage: 5Gi
+  port: 8080
+
+nodes:
+  image: kairos-node:latest
+  pullPolicy: IfNotPresent
+  replicas: 3
+  storage: 2Gi
+  port: 8080
+
+env:
+  BOOTSTRAP_SERVERS: "kairos-bootstrap-0.kairos-bootstrap:8080"

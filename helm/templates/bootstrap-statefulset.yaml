@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kairos-bootstrap
+spec:
+  serviceName: "kairos-bootstrap"
+  replicas: {{ .Values.bootstrap.replicas }}
+  selector:
+    matchLabels:
+      app: kairos-bootstrap
+  template:
+    metadata:
+      labels:
+        app: kairos-bootstrap
+    spec:
+      containers:
+        - name: bootstrap
+          image: {{ .Values.bootstrap.image }}
+          imagePullPolicy: {{ .Values.bootstrap.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.bootstrap.port }}
+          env:
+            - name: PORT
+              value: "{{ .Values.bootstrap.port }}"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: BOOTSTRAP_SERVERS
+              value: "{{ .Values.env.BOOTSTRAP_SERVERS }}"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: {{ .Values.bootstrap.storage }}
