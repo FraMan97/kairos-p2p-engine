@@ -1,0 +1,116 @@
+openapi: 3.0.3
+info:
+  title: Kairos P2P - Node API
+  version: 1.0.0
+  description: Main API for interacting with the storage nodes (upload, download, delete).
+servers:
+  - url: http://localhost:8085
+    description: Local Port-Forward Entry Point (Development)
+  - url: http://kairos-engine-api
+    description: Internal Cluster Entry Point (Production/Gateway)
+
+paths:
+  /put:
+    post:
+      summary: Upload and Seal a File
+      description: Uploads a file to the P2P network. The file is encrypted, fragmented (Reed-Solomon), and time-locked (Drand) until the specified release time.
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to be stored.
+                release_time:
+                  type: string
+                  format: date-time
+                  description: RFC3339 date/time when the file becomes decryptable.
+                  example: "2026-12-31T23:59:59Z"
+      responses:
+        "200":
+          description: Upload initiated. Returns the unique File ID.
+
+  /get:
+    get:
+      summary: Download and Reconstruct File
+      description: Retrieves shards from the network and reconstructs the original file. This will fail if the current time is before the release_time.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: The unique File ID.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Binary stream of the reconstructed file.
+        "403":
+          description: Forbidden - Release time not yet reached.
+
+  /delete:
+    delete:
+      summary: Delete File
+      description: Removes the file manifest and all associated shards from the network.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: The unique File ID.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File and associated chunks successfully deleted from the network.
+
+  /upload/status:
+    get:
+      summary: Check Upload Progress
+      description: Returns the current status of the asynchronous upload process.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: The File ID returned by the /put endpoint.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current status of the file processing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [processing, completed, error]
+
+  /metrics:
+    get:
+      summary: Get Node Metrics
+      description: Returns real-time telemetry data for the specific storage node, including disk space, BadgerDB usage, and the number of chunks currently stored.
+      responses:
+        "200":
+          description: A JSON object containing the node's health and storage metrics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  storage:
+                    type: object
+                    properties:
+                      database_used_bytes:
+                        type: integer
+                      disk_free_bytes:
+                        type: integer
+                  data:
+                    type: object
+                    properties:
+                      total_chunks:
+                        type: integer

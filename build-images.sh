@@ -8,3 +8,6 @@ docker build -t kairos-node:local -f Dockerfile.node .
 
 echo "Building CLI image..."
 docker build -t kairos-cli:local -f Dockerfile.cli .
+
+echo "Building Explorer image..."
+docker build -t kairos-explorer:local -f Dockerfile.explorer .

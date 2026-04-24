@@ -54,3 +54,25 @@ func CleanBootstrapDatabase(ctx context.Context) {
 		}
 	}
 }
+
+func CleanInactiveNodes(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			allNodes, _ := database.GetAllData(config.DB, "active_nodes")
+			now := time.Now().UnixNano()
+			for addr, data := range allNodes {
+				var record models.ActiveNodeRecord
+				json.NewDecoder(bytes.NewBuffer(data)).Decode(&record)
+				if now-record.Timestamp > int64(2*time.Minute) {
+					database.DeleteKey(config.DB, "active_nodes", addr)
+				}
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}

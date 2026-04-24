@@ -60,9 +60,10 @@ func main() {
 		go func() {
 			for {
 				if err := service.SubscribeNode(); err == nil {
-					break
+					time.Sleep(1 * time.Minute)
+				} else {
+					time.Sleep(5 * time.Second)
 				}
-				time.Sleep(5 * time.Second)
 			}
 		}()
 	}
@@ -76,6 +77,7 @@ func main() {
 	mux.HandleFunc("/delete", api.DeleteFile)
 	mux.HandleFunc("/chunk", api.Chunk)
 	mux.HandleFunc("/upload/status", api.CheckStatus)
+	mux.HandleFunc("/metrics", api.GetNodeMetrics)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.Port),

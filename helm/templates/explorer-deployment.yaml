@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kairos-explorer
+spec:
+  replicas: {{ .Values.explorer.replicas }}
+  selector:
+    matchLabels:
+      app: kairos-explorer
+  template:
+    metadata:
+      labels:
+        app: kairos-explorer
+    spec:
+      containers:
+        - name: explorer
+          image: {{ .Values.explorer.image }}
+          imagePullPolicy: {{ .Values.explorer.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.explorer.port }}
+          env:
+            - name: PORT
+              value: "{{ .Values.explorer.port }}"
+            - name: BOOTSTRAP_SERVERS
+              value: "{{ .Values.env.BOOTSTRAP_SERVERS }}"

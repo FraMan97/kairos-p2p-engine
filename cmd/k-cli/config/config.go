@@ -1,5 +1,5 @@
 package config
 
 var (
-	NodeURL string = "http://localhost:8080"
+	NodeURL string = "http://127.0.0.1:8085"
 )

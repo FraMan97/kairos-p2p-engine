@@ -58,6 +58,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go service.ServerBootstrapSync(ctx)
 	go service.CleanBootstrapDatabase(ctx)
+	go service.CleanInactiveNodes(ctx)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/subscribe", api.SubsribeNode)
@@ -72,6 +73,7 @@ func main() {
 			api.DeleteFileManifest(w, r)
 		}
 	})
+	mux.HandleFunc("/metrics", api.GetBootstrapMetrics)
 
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.Port),

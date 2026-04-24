@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/FraMan97/kairos-p2p-engine/internal/config"
@@ -136,4 +139,63 @@ func DeleteFileManifest(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
+}
+
+func GetBootstrapMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET method allowed!", http.StatusMethodNotAllowed)
+		return
+	}
+
+	nodes, err := database.GetAllKeys(config.DB, "active_nodes")
+	activeNodesCount := 0
+	var nodeAddresses []string
+
+	if err == nil {
+		activeNodesCount = len(nodes)
+		for _, key := range nodes {
+			addr := strings.TrimPrefix(string(key), "active_nodes_")
+			nodeAddresses = append(nodeAddresses, addr)
+		}
+	}
+
+	manifests, err := database.GetAllKeys(config.DB, "manifests")
+	totalFiles := 0
+	if err == nil {
+		totalFiles = len(manifests)
+	}
+
+	lsm, vlog := config.DB.Size()
+
+	dbPath := os.Getenv("KAIROS_DB_PATH")
+	if dbPath == "" {
+		dbPath = "/data"
+	}
+	var stat syscall.Statfs_t
+	var totalSpace, availableSpace, usedSpace uint64
+	if err := syscall.Statfs(dbPath, &stat); err == nil {
+		totalSpace = stat.Blocks * uint64(stat.Bsize)
+		availableSpace = stat.Bavail * uint64(stat.Bsize)
+		usedSpace = totalSpace - availableSpace
+	}
+
+	metrics := map[string]interface{}{
+		"status": "online",
+		"storage": map[string]interface{}{
+			"database_used_bytes": lsm + vlog,
+			"disk_total_bytes":    totalSpace,
+			"disk_used_bytes":     usedSpace,
+			"disk_free_bytes":     availableSpace,
+		},
+		"network": map[string]interface{}{
+			"active_nodes":   activeNodesCount,
+			"total_files":    totalFiles,
+			"node_addresses": nodeAddresses,
+		},
+	}
+
+	data, _ := json.Marshal(metrics)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }

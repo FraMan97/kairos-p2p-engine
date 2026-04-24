@@ -12,5 +12,11 @@ nodes:
   storage: 2Gi
   port: 8080
 
+explorer:
+  image: kairos-explorer:local
+  pullPolicy: Never
+  replicas: 1
+  port: 8081
+
 env:
   BOOTSTRAP_SERVERS: "kairos-bootstrap-0.kairos-bootstrap:8080"

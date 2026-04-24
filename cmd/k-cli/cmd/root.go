@@ -8,8 +8,8 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "k-cli",
-	Short: "CLI per testare il motore P2P Kairos",
-	Long:  "CLI per interagire direttamente con i nodi P2P della rete Kairos senza Gateway",
+	Short: "CLI to test the Kairos P2P engine",
+	Long:  "CLI to interact directly with Kairos network P2P nodes without a Gateway",
 }
 
 func Execute() {

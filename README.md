@@ -22,44 +22,49 @@ The core innovation of Kairos is its integration with the **Drand** beacon netwo
 ## Table of Contents
 
 * [System Architecture](#system-architecture)
-* [Node Discovery & Auto-Subscription](#node-discovery--auto-subscription)
+* [Node Discovery & Health Management](#node-discovery--health-management)
 * [Cryptographic Workflow](#cryptographic-workflow)
 * [Key Features](#key-features)
+* [API & Monitoring](#api--monitoring)
 * [CLI Usage Guide](#cli-usage-guide)
 * [Installation & Deployment](#installation--deployment)
-* [License](#license)
 
 ---
 
 ## System Architecture
 
-The engine consists of three decoupled components managed via Helm:
+The engine consists of four decoupled components managed via Helm:
 
 ### 1. Bootstrap Node (`k-bootstrap`)
 The network's central registry.
-* Maintains a dynamic list of active storage nodes.
-* Hosts **File Manifests** (metadata required for file reconstruction).
+* Maintains a dynamic list of active storage nodes and their health status.
+* Hosts **File Manifests** required for file reconstruction.
+* Manages a **Garbage Collection** worker to remove inactive nodes.
 * Synchronizes data between bootstrap instances for high availability.
-* *Does not handle actual data chunks*.
 
 ### 2. Storage Node (`k-node`)
 The data persistence layer.
 * Provides REST APIs for streaming upload (`/put`), status checks (`/upload/status`), and download (`/get`).
-* Stores encrypted data shards in **BadgerDB**, an LSM-tree based key-value store.
+* Stores encrypted data shards in **BadgerDB**.
+* Exposes telemetry via the `/metrics` endpoint.
 
-### 3. CLI Tool (`k-cli`)
+### 3. Explorer (`k-explorer`)
+The network monitoring dashboard (Headless).
+* Aggregates real-time data from all nodes to provide a global network overview.
+* Tracks total secured files, active nodes, and aggregated storage capacity.
+
+### 4. CLI Tool (`k-cli`)
 A command-line tool built with Cobra for interacting with the P2P network.
 
 ---
 
-## Node Discovery & Auto-Subscription
+## Node Discovery & Health Management
 
-One of the key features of the engine is the **automatic orchestration of the P2P network**. 
+Kairos features a robust **Heartbeat** and **Garbage Collection** mechanism to ensure network reliability:
 
-When a **Storage Node** starts, it automatically attempts to register itself with the configured **Bootstrap Servers**:
-* The node enters a background loop that signs a subscription request with its **Ed25519** private key.
-* It continuously retries registration every 5 seconds until a successful connection is established with a Bootstrap server.
-* Once registered, the Bootstrap server records the node's address and public key, making it available to the network for shard distribution.
+* **Auto-Subscription & Heartbeat**: When a Storage Node starts, it enters a background loop, automatically registering and re-verifying its presence with **Bootstrap Servers** every 60 seconds.
+* **Active Node Registry**: The Bootstrap server records the node's address and public key along with a high-resolution timestamp.
+* **Automatic Cleanup**: A dedicated worker on the Bootstrap Node scans the registry every minute. Nodes that fail to send a heartbeat for more than 2 minutes are automatically purged from the active list.
 
 ---
 
@@ -69,15 +74,15 @@ Kairos operates on a zero-trust model where data security is enforced by mathema
 
 ### Upload (PUT)
 1. **AES Encryption**: Each file block is encrypted using a unique, randomly generated AES-GCM key.
-2. **Time-Lock (Drand)**: The AES key is sealed using `tlock`, linking it to a specific future Drand network round corresponding to the desired release time.
+2. **Time-Lock (Drand)**: The AES key is sealed using `tlock`, linking it to a specific future Drand round.
 3. **Secret Sharing (Shamir)**: The time-locked key is split into multiple fragments using Shamir's Secret Sharing.
-4. **Erasure Coding (Reed-Solomon)**: The encrypted data block is fragmented into Data and Parity shards.
-5. **Sharded Distribution**: Shards and key fragments are distributed across different nodes. No single node holds enough information to reconstruct the key or the data.
+4. **Erasure Coding (Reed-Solomon)**: The encrypted block is fragmented into Data and Parity shards.
+5. **Sharded Distribution**: Shards and key fragments are distributed across nodes. No single node holds enough information to reconstruct the key or data.
 
 ### Download (GET)
-1. The node retrieves the File Manifest from the Bootstrap server and fetches the required shards from storage nodes.
-2. Data shards are merged (Reed-Solomon) and key fragments are combined (Shamir).
-3. The node contacts the Drand network. If the release time has passed, Drand provides the decryption signature needed to unlock the AES key. If the time has not yet been reached, the key remains mathematically locked.
+1. The node retrieves the File Manifest from the Bootstrap server and fetches required shards from available storage nodes.
+2. Data shards are merged and key fragments are combined.
+3. The node contacts the Drand network. If the release time has passed, Drand provides the decryption signature needed to unlock the AES key.
 
 ---
 
@@ -90,29 +95,35 @@ Kairos operates on a zero-trust model where data security is enforced by mathema
 
 ---
 
+## API & Monitoring
+
+The system provides separate OpenAPI documentations for its services:
+
+* **Node API (Port 8085)**: Handles data operations (`/put`, `/get`, `/delete`, `/upload/status`) and local telemetry (`/metrics`).
+* **Explorer API (Port 8081)**: Provides a global network state via `/network/overview`.
+
+---
+
 ## CLI Usage Guide
 
-The CLI interacts with the network through the Node API (typically on `localhost:8080` via port-forward).
+The CLI interacts with the network through the Node API on `localhost:8085`.
 
 ### 1. Upload a file (`put`)
 Store a file and set its release date (UTC ISO8601).
 ```bash
-docker run --rm --network host -v $(pwd):/workspace kairos-cli:local \
-  put -f /workspace/secret.txt -r "2026-12-31T23:59:59Z"
+go run ./cmd/k-cli/main.go put -f ./secret.txt -r "2026-12-31T23:59:59Z"
 ```
 
 ### 2. Download a file (`get`)
 Reconstruct and decrypt a file using its unique ID.
 ```bash
-docker run --rm --network host -v $(pwd):/workspace kairos-cli:local \
-  get -f <FILE_ID> -o /workspace
+go run ./cmd/k-cli/main.go get -f <FILE_ID> -o ./downloads
 ```
 
 ### 3. Delete a file (`delete`)
 Remove a file manifest and all associated shards from the network.
 ```bash
-docker run --rm --network host -v $(pwd):/workspace kairos-cli:local \
-  delete -f <FILE_ID>
+go run ./cmd/k-cli/main.go delete -f <FILE_ID>
 ```
 
 ---
@@ -125,3 +136,8 @@ Create a cluster and use the provided deployment scripts:
 kind create cluster --name kairos-vault
 ./deploy-dev.sh
 ```
+The script automatically configures port-forwards:
+
+* **Node API**: http://localhost:8085
+
+* **Network Explorer**: http://localhost:8081/network/overview

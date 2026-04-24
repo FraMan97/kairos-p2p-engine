@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/FraMan97/kairos-p2p-engine/internal/config"
 	"github.com/FraMan97/kairos-p2p-engine/internal/database"
@@ -206,4 +207,58 @@ func Chunk(w http.ResponseWriter, r *http.Request) {
 	} else {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func GetNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET method allowed!", http.StatusMethodNotAllowed)
+		return
+	}
+
+	chunks, err := database.GetAllKeys(config.DB, "chunks")
+	totalChunks := 0
+	if err == nil {
+		totalChunks = len(chunks)
+	}
+
+	lsm, vlog := config.DB.Size()
+	badgerSize := lsm + vlog
+
+	dbPath := os.Getenv("KAIROS_DB_PATH")
+	if dbPath == "" {
+		dbPath = "/data"
+	}
+
+	var stat syscall.Statfs_t
+	var totalSpace, availableSpace, usedSpace uint64
+
+	err = syscall.Statfs(dbPath, &stat)
+	if err == nil {
+		totalSpace = stat.Blocks * uint64(stat.Bsize)
+		availableSpace = stat.Bavail * uint64(stat.Bsize)
+		usedSpace = totalSpace - availableSpace
+	}
+
+	metrics := map[string]interface{}{
+		"status": "online",
+		"storage": map[string]interface{}{
+			"database_used_bytes": badgerSize,
+			"disk_total_bytes":    totalSpace,
+			"disk_used_bytes":     usedSpace,
+			"disk_free_bytes":     availableSpace,
+		},
+		"data": map[string]interface{}{
+			"total_chunks": totalChunks,
+		},
+	}
+
+	data, err := json.Marshal(metrics)
+	if err != nil {
+		http.Error(w, "Error encoding metrics", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }

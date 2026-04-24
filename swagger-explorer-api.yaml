@@ -1,0 +1,52 @@
+openapi: 3.0.3
+info:
+  title: Kairos P2P - Explorer API
+  version: 1.0.0
+  description: API for monitoring the global status of the P2P network.
+servers:
+  - url: http://localhost:8081
+    description: Local Explorer Entry Point (Development)
+  - url: http://kairos-explorer:8081
+    description: Internal Cluster Explorer Entry Point
+
+paths:
+  /network/overview:
+    get:
+      summary: Get Network Overview
+      description: Returns a complete overview of the P2P network, including secured files, active nodes, and aggregated storage metrics.
+      responses:
+        "200":
+          description: Complete network status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_files_secured:
+                    type: integer
+                  active_nodes_count:
+                    type: integer
+                  total_chunks_distributed:
+                    type: integer
+                  aggregated_node_storage:
+                    type: object
+                    properties:
+                      database_used_bytes:
+                        type: integer
+                      disk_total_bytes:
+                        type: integer
+                      disk_used_bytes:
+                        type: integer
+                      disk_free_bytes:
+                        type: integer
+                  nodes_detail:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        address:
+                          type: string
+                        status:
+                          type: string
+                        total_chunks:
+                          type: integer
