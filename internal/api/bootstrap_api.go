@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -19,6 +20,7 @@ import (
 )
 
 func SubsribeNode(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[API: SubscribeNode] - [INFO] Incoming subscription request")
 	var subscription models.SubscriptionRequest
 	json.NewDecoder(r.Body).Decode(&subscription)
 	defer r.Body.Close()
@@ -29,13 +31,16 @@ func SubsribeNode(w http.ResponseWriter, r *http.Request) {
 	if check {
 		payload, _ := json.Marshal(models.ActiveNodeRecord{PublicKey: subscription.PublicKey, Timestamp: time.Now().UnixNano()})
 		database.PutData(config.DB, "active_nodes", subscription.Address, payload)
+		log.Printf("[API: SubscribeNode] - [SUCCESS] Node %s successfully subscribed to network", subscription.Address)
 		w.WriteHeader(http.StatusOK)
 	} else {
+		log.Printf("[API: SubscribeNode] - [WARN] Unauthorized subscription attempt from address: %s", subscription.Address)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
 
 func SynchronizeData(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[API: SynchronizeData] - [INFO] Sync request received")
 	var receivedData models.SynchronizationRequest
 	json.NewDecoder(r.Body).Decode(&receivedData)
 	defer r.Body.Close()
@@ -44,6 +49,7 @@ func SynchronizeData(w http.ResponseWriter, r *http.Request) {
 	check, _ := crypto.VerifySignature(message, receivedData.Signature, receivedData.PublicKey)
 
 	if check {
+		log.Printf("[API: SynchronizeData] - [INFO] Signature valid. Processing sync for node: %s", receivedData.Address)
 		activeNodes, _ := database.GetAllData(config.DB, "active_nodes")
 		fileManifests, _ := database.GetAllData(config.DB, "manifests")
 
@@ -60,13 +66,17 @@ func SynchronizeData(w http.ResponseWriter, r *http.Request) {
 
 		jsonBytes, _ = json.Marshal(dataToExchange)
 		go service.ProcessAlignment(dataToExchange, receivedData)
+
+		log.Printf("[API: SynchronizeData] - [SUCCESS] Sync data dispatched to %s", receivedData.Address)
 		w.Write(jsonBytes)
 	} else {
+		log.Printf("[API: SynchronizeData] - [WARN] Unauthorized sync attempt from %s", receivedData.Address)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
 
 func RequestNodesForFileUploadAPI(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[API: RequestNodesForFileUpload] - [INFO] Node allocation requested")
 	var request models.NodesForFileUploadRequest
 	json.NewDecoder(r.Body).Decode(&request)
 	defer r.Body.Close()
@@ -85,9 +95,11 @@ func RequestNodesForFileUploadAPI(w http.ResponseWriter, r *http.Request) {
 			response = allDBNodes[:nodesToPickup] // Simple slice for now
 		}
 
+		log.Printf("[API: RequestNodesForFileUpload] - [SUCCESS] Allocated %d nodes for upload to %s", len(response), request.Address)
 		jsonBytes, _ := json.Marshal(response)
 		w.Write(jsonBytes)
 	} else {
+		log.Printf("[API: RequestNodesForFileUpload] - [WARN] Unauthorized node request from %s", request.Address)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
@@ -97,14 +109,18 @@ func InsertFileManifest(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&request)
 	defer r.Body.Close()
 
+	log.Printf("[API: InsertFileManifest] - [INFO] Request to insert manifest for FileID: %s", request.Manifest.FileId)
+
 	manifestBytes, _ := json.Marshal(request.Manifest)
 	hashToVerify := sha256.Sum256(manifestBytes)
 
 	check, _ := crypto.VerifySignature(hashToVerify[:], request.Signature, request.PublicKey)
 	if check {
 		database.PutData(config.DB, "manifests", request.Manifest.FileId, manifestBytes)
+		log.Printf("[API: InsertFileManifest] - [SUCCESS] Manifest securely stored for FileID: %s", request.Manifest.FileId)
 		w.WriteHeader(http.StatusOK)
 	} else {
+		log.Printf("[API: InsertFileManifest] - [WARN] Unauthorized manifest insertion attempt for FileID: %s", request.Manifest.FileId)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
@@ -114,13 +130,17 @@ func DownloadFileManifest(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&request)
 	defer r.Body.Close()
 
+	log.Printf("[API: DownloadFileManifest] - [INFO] Request to download manifest for FileID: %s", request.FileId)
+
 	message, _ := json.Marshal(models.GetFileManifestRequest{Address: request.Address, PublicKey: request.PublicKey, FileId: request.FileId})
 	check, _ := crypto.VerifySignature(message, request.Signature, request.PublicKey)
 
 	if check {
 		dbData, _ := database.GetData(config.DB, "manifests", request.FileId)
+		log.Printf("[API: DownloadFileManifest] - [SUCCESS] Manifest dispatched for FileID: %s", request.FileId)
 		w.Write(dbData)
 	} else {
+		log.Printf("[API: DownloadFileManifest] - [WARN] Unauthorized manifest download attempt for FileID: %s", request.FileId)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
@@ -130,13 +150,17 @@ func DeleteFileManifest(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&request)
 	defer r.Body.Close()
 
+	log.Printf("[API: DeleteFileManifest] - [INFO] Request to delete manifest for FileID: %s", request.FileId)
+
 	message, _ := json.Marshal(models.GetFileManifestRequest{Address: request.Address, PublicKey: request.PublicKey, FileId: request.FileId})
 	check, _ := crypto.VerifySignature(message, request.Signature, request.PublicKey)
 
 	if check {
 		database.DeleteKey(config.DB, "manifests", request.FileId)
+		log.Printf("[API: DeleteFileManifest] - [SUCCESS] Manifest deleted for FileID: %s", request.FileId)
 		w.WriteHeader(http.StatusOK)
 	} else {
+		log.Printf("[API: DeleteFileManifest] - [WARN] Unauthorized manifest deletion attempt for FileID: %s", request.FileId)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }

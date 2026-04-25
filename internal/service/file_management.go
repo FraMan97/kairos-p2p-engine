@@ -28,10 +28,11 @@ import (
 )
 
 func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize int, releaseTime string, fileId string) error {
-	log.Printf("[StreamUpload] - Starting streaming process for FileID: %s", fileId)
+	log.Printf("[StreamUpload] - [START] Initializing streaming for FileID: %s", fileId)
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
+		log.Printf("[StreamUpload] - [ERROR] File hashing failed: %v", err)
 		return fmt.Errorf("error hashing file: %v", err)
 	}
 	fileHash := hex.EncodeToString(hasher.Sum(nil))
@@ -45,19 +46,25 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 		return fmt.Errorf("error getting file stats: %v", err)
 	}
 	fileSize := fileInfo.Size()
+	log.Printf("[StreamUpload] - [INFO] File verified. Size: %d bytes, Hash: %s", fileSize, fileHash)
 
 	totalBlocks := int((fileSize + int64(blockSize) - 1) / int64(blockSize))
 	if totalBlocks == 0 {
 		totalBlocks = 1
 	}
 
+	log.Printf("[StreamUpload] - [STEP 1] Requesting active nodes from Bootstrap...")
 	nodes, err := RequestNodesForFileUpload(totalBlocks * config.TotalShards)
 	if err != nil {
+		log.Printf("[StreamUpload] - [ERROR] Node request failed: %v", err)
 		return fmt.Errorf("failed to get nodes: %v", err)
 	}
+	log.Printf("[StreamUpload] - [INFO] Target nodes acquired: %d", len(nodes))
 
+	log.Printf("[StreamUpload] - [STEP 2] Fetching Drand round for release time: %s", releaseTime)
 	drandRound, err := GetRoundForTime(releaseTime)
 	if err != nil {
+		log.Printf("[StreamUpload] - [ERROR] Drand round lookup failed: %v", err)
 		return fmt.Errorf("error getting drand round: %v", err)
 	}
 
@@ -114,14 +121,16 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 				for _, nodeAddr := range job.targetNodes {
 					resp, err := config.HttpClient.Post(fmt.Sprintf("http://%s/chunk", nodeAddr), "application/json", bytes.NewBuffer(jsonBytes))
 					if err == nil {
-						defer resp.Body.Close()
-						if resp.StatusCode == 200 {
+						isOk := resp.StatusCode == 200
+						resp.Body.Close()
+						if isOk {
 							success = true
 							break
 						}
 					}
 				}
 				if !success {
+					log.Printf("[StreamUpload] - [WARN] Worker failed to upload chunk %s", job.chunkReq.ChunkId)
 					select {
 					case errChan <- fmt.Errorf("failed to upload chunk %s", job.chunkReq.ChunkId):
 					default:
@@ -134,6 +143,7 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 	buffer := make([]byte, blockSize)
 	blockID := 0
 
+	log.Printf("[StreamUpload] - [STEP 3] Starting fragmentation and time-lock encryption loop...")
 	for {
 		n, err := io.ReadFull(file, buffer)
 		if err == io.EOF {
@@ -229,24 +239,30 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 		}
 	}
 
+	log.Printf("[StreamUpload] - [STEP 4] Fragmentation complete. Waiting for workers to finish...")
 	close(jobs)
 	wg.Wait()
 
 	select {
 	case err := <-errChan:
+		log.Printf("[StreamUpload] - [ERROR] Upload pipeline failed: %v", err)
 		return fmt.Errorf("upload pipeline failed: %v", err)
 	default:
 	}
 
+	log.Printf("[StreamUpload] - [STEP 5] Finalizing process: Uploading manifest...")
 	err = UploadFileManifest(fileManifest)
 	if err != nil {
+		log.Printf("[StreamUpload] - [ERROR] Manifest upload failed: %v", err)
 		return fmt.Errorf("manifest upload failed: %v", err)
 	}
 
+	log.Printf("[StreamUpload] - [SUCCESS] File fully secured and distributed. FileID: %s", fileId)
 	return nil
 }
 
 func StreamReconstruct(w io.Writer, fileManifest *models.FileManifest) error {
+	log.Printf("[StreamReconstruct] - [START] Reconstructing file: %s", fileManifest.FileId)
 	tNetwork, err := tlock_http.NewNetwork(config.DrandRelays[rand.Intn(len(config.DrandRelays))], config.DrandChainHash)
 	if err != nil {
 		return fmt.Errorf("network tlock error: %v", err)
@@ -298,6 +314,7 @@ func StreamReconstruct(w io.Writer, fileManifest *models.FileManifest) error {
 		}
 
 		if shardsReceived < shardsRequired {
+			log.Printf("[StreamReconstruct] - [ERROR] Critical: insufficient shards for block %d", i)
 			return fmt.Errorf("insufficient data for block %d", i)
 		}
 
@@ -320,6 +337,7 @@ func StreamReconstruct(w io.Writer, fileManifest *models.FileManifest) error {
 		var plainAESKeyBuf bytes.Buffer
 		err = tlockClient.Decrypt(&plainAESKeyBuf, bytes.NewReader(encryptedAESKey))
 		if err != nil {
+			log.Printf("[StreamReconstruct] - [ERROR] Drand decryption failed for block %d. Release time likely not reached.", i)
 			return fmt.Errorf("failed to unlock key with drand: %v", err)
 		}
 
@@ -333,6 +351,7 @@ func StreamReconstruct(w io.Writer, fileManifest *models.FileManifest) error {
 		}
 	}
 
+	log.Printf("[StreamReconstruct] - [SUCCESS] Reconstruction complete for FileID: %s", fileManifest.FileId)
 	return nil
 }
 

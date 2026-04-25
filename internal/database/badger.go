@@ -14,8 +14,11 @@ func makeKey(prefix, key string) []byte {
 }
 
 func OpenDatabase(dbDir string) (*badger.DB, error) {
+	log.Printf("[Database] - [INFO] Attempting to open BadgerDB in directory: %s", dbDir)
+
 	err := os.MkdirAll(dbDir, 0700)
 	if err != nil {
+		log.Printf("[Database] - [ERROR] Failed to create database directory: %v", err)
 		return nil, err
 	}
 
@@ -24,10 +27,11 @@ func OpenDatabase(dbDir string) (*badger.DB, error) {
 
 	db, err := badger.Open(opts)
 	if err != nil {
+		log.Printf("[Database] - [ERROR] Critical failure opening BadgerDB: %v", err)
 		return nil, err
 	}
 
-	log.Printf("[Database] - BadgerDB opened successfully in '%s'\n", dbDir)
+	log.Printf("[Database] - [SUCCESS] BadgerDB opened successfully in '%s'", dbDir)
 	config.DB = db
 	return db, nil
 }
@@ -45,22 +49,36 @@ func GetData(db *badger.DB, prefix string, key string) ([]byte, error) {
 		})
 		return err
 	})
+
 	if err != nil {
+		if err != badger.ErrKeyNotFound {
+			log.Printf("[Database: GetData] - [ERROR] Failed to retrieve key '%s:%s': %v", prefix, key, err)
+		}
 		return nil, err
 	}
 	return value, nil
 }
 
 func PutData(db *badger.DB, prefix string, key string, data []byte) error {
-	return db.Update(func(txn *badger.Txn) error {
+	err := db.Update(func(txn *badger.Txn) error {
 		return txn.Set(makeKey(prefix, key), data)
 	})
+
+	if err != nil {
+		log.Printf("[Database: PutData] - [ERROR] Failed to write key '%s:%s': %v", prefix, key, err)
+	}
+	return err
 }
 
 func DeleteKey(db *badger.DB, prefix string, key string) error {
-	return db.Update(func(txn *badger.Txn) error {
+	err := db.Update(func(txn *badger.Txn) error {
 		return txn.Delete(makeKey(prefix, key))
 	})
+
+	if err != nil {
+		log.Printf("[Database: DeleteKey] - [ERROR] Failed to delete key '%s:%s': %v", prefix, key, err)
+	}
+	return err
 }
 
 func ExistsKey(db *badger.DB, prefix string, key string) (bool, error) {
@@ -76,6 +94,10 @@ func ExistsKey(db *badger.DB, prefix string, key string) (bool, error) {
 		exists = true
 		return nil
 	})
+
+	if err != nil {
+		log.Printf("[Database: ExistsKey] - [ERROR] Unexpected error checking key '%s:%s': %v", prefix, key, err)
+	}
 	return exists, err
 }
 
@@ -103,6 +125,10 @@ func GetAllData(db *badger.DB, prefix string) (map[string][]byte, error) {
 		}
 		return nil
 	})
+
+	if err != nil {
+		log.Printf("[Database: GetAllData] - [ERROR] Failed to iterate over prefix '%s': %v", prefix, err)
+	}
 	return values, err
 }
 
@@ -123,5 +149,9 @@ func GetAllKeys(db *badger.DB, prefix string) ([]string, error) {
 		}
 		return nil
 	})
+
+	if err != nil {
+		log.Printf("[Database: GetAllKeys] - [ERROR] Failed to list keys for prefix '%s': %v", prefix, err)
+	}
 	return keys, err
 }

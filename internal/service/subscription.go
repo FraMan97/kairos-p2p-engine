@@ -15,30 +15,48 @@ import (
 
 func SubscribeNode() error {
 	if len(config.BootStrapServers) == 0 {
+		log.Printf("[Subscription] - [WARN] No bootstrap servers configured. Skipping subscription.")
 		return nil
 	}
-	chosenServer := rand.Intn(len(config.BootStrapServers))
+
+	chosenServer := config.BootStrapServers[rand.Intn(len(config.BootStrapServers))]
+	nodeAddress := config.AdvertisedAddress + ":" + strconv.Itoa(config.Port)
+
 	subscription := models.SubscriptionRequest{
-		Address:   config.AdvertisedAddress + ":" + strconv.Itoa(config.Port),
+		Address:   nodeAddress,
 		PublicKey: config.PublicKey,
 	}
 
-	jsonBytes, _ := json.Marshal(subscription)
-	signature, _ := crypto.SignMessage(jsonBytes)
+	jsonBytes, err := json.Marshal(subscription)
+	if err != nil {
+		log.Printf("[Subscription] - [ERROR] Failed to marshal subscription request: %v", err)
+		return err
+	}
+
+	signature, err := crypto.SignMessage(jsonBytes)
+	if err != nil {
+		log.Printf("[Subscription] - [ERROR] Failed to sign subscription request: %v", err)
+		return err
+	}
 	subscription.Signature = signature
 
 	jsonBytes, _ = json.Marshal(subscription)
-	resp, err := config.HttpClient.Post(fmt.Sprintf("http://%s/subscribe", config.BootStrapServers[chosenServer]),
-		"application/json", bytes.NewBuffer(jsonBytes))
 
+	targetURL := fmt.Sprintf("http://%s/subscribe", chosenServer)
+	log.Printf("[Subscription] - [INFO] Attempting to subscribe to bootstrap node: %s", chosenServer)
+
+	resp, err := config.HttpClient.Post(targetURL, "application/json", bytes.NewBuffer(jsonBytes))
 	if err != nil {
+		log.Printf("[Subscription] - [ERROR] Network failure while contacting bootstrap %s: %v", chosenServer, err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 200 {
-		log.Printf("[Subscription] Subscribed to %s", config.BootStrapServers[chosenServer])
+		log.Printf("[Subscription] - [SUCCESS] Node %s successfully registered at %s", nodeAddress, chosenServer)
 		return nil
 	}
-	return fmt.Errorf("subscription failed")
+
+	log.Printf("[Subscription] - [WARN] Subscription rejected by %s. Status Code: %d", chosenServer, resp.StatusCode)
+	return fmt.Errorf("subscription failed with status: %d", resp.StatusCode)
 }
