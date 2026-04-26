@@ -540,9 +540,18 @@ func RequestChunk(node string, chunkId string) (*models.ChunkRequest, error) {
 
 func RequestChunkDeletion(nodeAddress string, chunkId string) error {
 	url := fmt.Sprintf("http://%s/chunk?id=%s", nodeAddress, chunkId)
-	req, _ := http.NewRequest(http.MethodDelete, url, nil)
+
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		log.Printf("[GC] Invalid delete request for %s: %v", url, err)
+		return err
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	_, err := client.Do(req)
+	resp, err := client.Do(req)
+	if err == nil && resp != nil {
+		resp.Body.Close()
+	}
+
 	return err
 }
 
