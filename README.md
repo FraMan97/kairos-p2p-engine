@@ -8,13 +8,13 @@
 ![Drand](https://img.shields.io/badge/Drand-141d26?style=for-the-badge&logo=lock&logoColor=white)
 ![Reed-Solomon](https://img.shields.io/badge/Reed--Solomon-blueviolet?style=for-the-badge)
 ![Shamir](https://img.shields.io/badge/Shamir_Secret_Sharing-ff69b4?style=for-the-badge)
-![License](https://img.shields.io/badge/License-GNU_AGPL_v3-blue?style=for-the-badge&logo=gnu&logoColor=white)
 
 `kairos-p2p-engine` is a high-performance, decentralized peer-to-peer storage engine designed as a cloud-native **Headless** infrastructure. It leverages advanced cryptographic primitives to provide secure, resilient storage with a mathematically enforced **Time-Lock** release mechanism.
 
 The core innovation of Kairos is its integration with the **Drand** beacon network: files remain cryptographically sealed and absolutely inaccessible to anyone—including the storage nodes—until a specific user-defined release time is reached.
 
 > [!WARNING]
+> This repository is for portfolio and demonstration purposes only. The source code is copyrighted and no license is granted for its use, modification, or distribution.
 > This project is a Proof of Concept (POC) focused on backend infrastructure and is not intended for production environments without further security audits.
 
 ---
