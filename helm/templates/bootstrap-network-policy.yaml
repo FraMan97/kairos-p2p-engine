@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bootstrap-ingress-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: kairos-bootstrap
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kairos-node
+        - podSelector:
+            matchLabels:
+              app: kairos-explorer
+        - podSelector:
+            matchLabels:
+              app: kairos-bootstrap
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -62,7 +62,8 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/subscribe", api.SubsribeNode)
-	mux.HandleFunc("/synchronize", api.SynchronizeData)
+	mux.HandleFunc("/sync/digest", api.SyncDigestHandler)
+	mux.HandleFunc("/sync/push", api.SyncPushHandler)
 	mux.HandleFunc("/file/nodes", api.RequestNodesForFileUploadAPI)
 	mux.HandleFunc("/file/manifest", api.InsertFileManifest)
 	mux.HandleFunc("/manifests", func(w http.ResponseWriter, r *http.Request) {

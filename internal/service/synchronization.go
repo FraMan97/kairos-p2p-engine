@@ -17,7 +17,7 @@ import (
 )
 
 func ServerBootstrapSync(ctx context.Context) {
-	log.Printf("[Sync: Bootstrap] - [INFO] Background synchronization worker started. Interval: %d seconds", config.CronSync)
+	log.Printf("[Sync: Bootstrap] - [INFO] Background delta-sync worker started. Interval: %d seconds", config.CronSync)
 	ticker := time.NewTicker(time.Duration(config.CronSync) * time.Second)
 	defer ticker.Stop()
 
@@ -44,43 +44,32 @@ func performSync() {
 		return
 	}
 
-	log.Printf("[Sync: Bootstrap] - [INFO] Initiating data exchange with peer: %s", chosenServer)
+	log.Printf("[Sync: Bootstrap] - [INFO] Initiating Delta-Sync with peer: %s", chosenServer)
 
-	activeNodes, err := database.GetAllData(config.DB, "active_nodes")
-	if err != nil {
-		log.Printf("[Sync: Bootstrap] - [ERROR] Failed to fetch active nodes from DB: %v", err)
+	nodeKeys, _ := database.GetAllKeys(config.DB, "active_nodes")
+	manifestKeys, _ := database.GetAllKeys(config.DB, "manifests")
+
+	digest := models.SyncDigest{
+		Address:      selfAddress,
+		PublicKey:    config.PublicKey,
+		NodeKeys:     nodeKeys,
+		ManifestKeys: manifestKeys,
 	}
 
-	fileManifests, err := database.GetAllData(config.DB, "manifests")
+	jsonBytes, err := json.Marshal(digest)
 	if err != nil {
-		log.Printf("[Sync: Bootstrap] - [ERROR] Failed to fetch manifests from DB: %v", err)
-	}
-
-	dataToExchange := models.SynchronizationRequest{
-		Address:       selfAddress,
-		PublicKey:     config.PublicKey,
-		ActiveNodes:   activeNodes,
-		FileManifests: fileManifests,
-	}
-
-	jsonBytes, err := json.Marshal(dataToExchange)
-	if err != nil {
-		log.Printf("[Sync: Bootstrap] - [ERROR] Failed to marshal sync data: %v", err)
 		return
 	}
 
 	signature, err := crypto.SignMessage(jsonBytes)
 	if err != nil {
-		log.Printf("[Sync: Bootstrap] - [ERROR] Failed to sign sync payload: %v", err)
 		return
 	}
-	dataToExchange.Signature = signature
+	digest.Signature = signature
+	jsonBytes, _ = json.Marshal(digest)
 
-	jsonBytes, _ = json.Marshal(dataToExchange)
-
-	targetURL := fmt.Sprintf("http://%s/synchronize", chosenServer)
+	targetURL := fmt.Sprintf("http://%s/sync/digest", chosenServer)
 	resp, err := config.HttpClient.Post(targetURL, "application/json", bytes.NewBuffer(jsonBytes))
-
 	if err != nil {
 		log.Printf("[Sync: Bootstrap] - [ERROR] Peer %s unreachable: %v", chosenServer, err)
 		return
@@ -88,32 +77,66 @@ func performSync() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 200 {
-		var receivedData models.SynchronizationRequest
-		if err := json.NewDecoder(resp.Body).Decode(&receivedData); err != nil {
-			log.Printf("[Sync: Bootstrap] - [ERROR] Failed to decode response from %s: %v", chosenServer, err)
+		var payload models.SyncPayload
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 			return
 		}
 
-		log.Printf("[Sync: Bootstrap] - [SUCCESS] Payload received from %s. Nodes: %d, Manifests: %d",
-			chosenServer, len(receivedData.ActiveNodes), len(receivedData.FileManifests))
+		ProcessAlignment(payload.ActiveNodes, payload.FileManifests)
 
-		ProcessAlignment(dataToExchange, receivedData)
-	} else {
-		log.Printf("[Sync: Bootstrap] - [WARN] Peer %s returned unexpected status: %d", chosenServer, resp.StatusCode)
+		if len(payload.RequestedNodes) > 0 || len(payload.RequestedManifests) > 0 {
+			pushMissingData(chosenServer, payload.RequestedNodes, payload.RequestedManifests)
+		}
 	}
 }
 
-func ProcessAlignment(dbData models.SynchronizationRequest, receivedData models.SynchronizationRequest) {
+func pushMissingData(targetServer string, reqNodes []string, reqManifests []string) {
+	selfAddress := config.AdvertisedAddress + ":" + strconv.Itoa(config.Port)
+	nodesData := make(map[string][]byte)
+	manifestsData := make(map[string][]byte)
+
+	for _, key := range reqNodes {
+		if data, err := database.GetData(config.DB, "active_nodes", key); err == nil {
+			nodesData[key] = data
+		}
+	}
+
+	for _, key := range reqManifests {
+		if data, err := database.GetData(config.DB, "manifests", key); err == nil {
+			manifestsData[key] = data
+		}
+	}
+
+	payload := models.SyncPayload{
+		Address:       selfAddress,
+		PublicKey:     config.PublicKey,
+		ActiveNodes:   nodesData,
+		FileManifests: manifestsData,
+	}
+
+	jsonBytes, _ := json.Marshal(payload)
+	signature, _ := crypto.SignMessage(jsonBytes)
+	payload.Signature = signature
+	jsonBytes, _ = json.Marshal(payload)
+
+	targetURL := fmt.Sprintf("http://%s/sync/push", targetServer)
+	resp, err := config.HttpClient.Post(targetURL, "application/json", bytes.NewBuffer(jsonBytes))
+	if err == nil {
+		resp.Body.Close()
+	}
+}
+
+func ProcessAlignment(nodes map[string][]byte, manifests map[string][]byte) {
 	nodesUpdated := 0
 	manifestsUpdated := 0
 
-	for k, v := range receivedData.ActiveNodes {
+	for k, v := range nodes {
 		if err := database.PutData(config.DB, "active_nodes", k, v); err == nil {
 			nodesUpdated++
 		}
 	}
 
-	for k, v := range receivedData.FileManifests {
+	for k, v := range manifests {
 		check, err := database.ExistsKey(config.DB, "manifests", k)
 		if err == nil && !check {
 			if err := database.PutData(config.DB, "manifests", k, v); err == nil {
@@ -123,7 +146,29 @@ func ProcessAlignment(dbData models.SynchronizationRequest, receivedData models.
 	}
 
 	if nodesUpdated > 0 || manifestsUpdated > 0 {
-		log.Printf("[Sync: Alignment] - [SUCCESS] Database aligned: %d nodes updated, %d new manifests stored",
-			nodesUpdated, manifestsUpdated)
+		log.Printf("[Sync: Alignment] - [SUCCESS] Database aligned: %d nodes updated, %d new manifests stored", nodesUpdated, manifestsUpdated)
 	}
+}
+
+func CompareKeys(localKeys, remoteKeys []string) (missingInLocal, missingInRemote []string) {
+	localMap := make(map[string]bool)
+	for _, k := range localKeys {
+		localMap[k] = true
+	}
+
+	remoteMap := make(map[string]bool)
+	for _, k := range remoteKeys {
+		remoteMap[k] = true
+		if !localMap[k] {
+			missingInLocal = append(missingInLocal, k)
+		}
+	}
+
+	for _, k := range localKeys {
+		if !remoteMap[k] {
+			missingInRemote = append(missingInRemote, k)
+		}
+	}
+
+	return missingInLocal, missingInRemote
 }

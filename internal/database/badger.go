@@ -155,3 +155,37 @@ func GetAllKeys(db *badger.DB, prefix string) ([]string, error) {
 	}
 	return keys, err
 }
+
+func IterateAndProcess(db *badger.DB, prefix string, processFn func(key string, value []byte)) error {
+	prefixBytes := []byte(fmt.Sprintf("%s:", prefix))
+
+	return db.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		it := txn.NewIterator(opts)
+		defer it.Close()
+
+		for it.Seek(prefixBytes); it.ValidForPrefix(prefixBytes); it.Next() {
+			item := it.Item()
+			k := item.Key()
+			originalKey := string(k[len(prefixBytes):])
+
+			err := item.Value(func(v []byte) error {
+				processFn(originalKey, v)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func RunValueLogGC(db *badger.DB) {
+	for {
+		err := db.RunValueLogGC(0.5)
+		if err != nil {
+			break
+		}
+	}
+}

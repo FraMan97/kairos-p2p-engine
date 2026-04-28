@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,7 +17,10 @@ import (
 	"github.com/FraMan97/kairos-p2p-engine/internal/config"
 	"github.com/FraMan97/kairos-p2p-engine/internal/crypto"
 	"github.com/FraMan97/kairos-p2p-engine/internal/database"
+	"github.com/FraMan97/kairos-p2p-engine/internal/grpc/pb"
+	"github.com/FraMan97/kairos-p2p-engine/internal/grpc/server"
 	"github.com/FraMan97/kairos-p2p-engine/internal/service"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -79,14 +83,30 @@ func main() {
 	mux.HandleFunc("/upload/status", api.CheckStatus)
 	mux.HandleFunc("/metrics", api.GetNodeMetrics)
 
-	server := &http.Server{
+	grpcPort := config.Port + 1000
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", grpcPort))
+	if err != nil {
+		log.Fatalf("Failed to listen for gRPC: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterNodeServiceServer(grpcServer, &server.NodeServer{})
+
+	go func() {
+		log.Printf("[Node] gRPC Server listening on %d", grpcPort)
+		if err := grpcServer.Serve(lis); err != nil {
+			log.Fatalf("gRPC Server error: %v", err)
+		}
+	}()
+
+	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.Port),
 		Handler: mux,
 	}
 
 	go func() {
-		log.Printf("[Node] Listening on %d", config.Port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Printf("[Node] HTTP Server listening on %d", config.Port)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Listen error: %v", err)
 		}
 	}()
@@ -97,7 +117,11 @@ func main() {
 
 	log.Println("Shutting down Node Gracefully...")
 	cancel()
-	server.Shutdown(context.Background())
+
+	grpcServer.GracefulStop()
+	httpServer.Shutdown(context.Background())
+	service.CloseAllGrpcConnections()
 	db.Close()
+
 	log.Println("Node stopped")
 }

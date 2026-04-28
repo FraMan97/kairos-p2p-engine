@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package p2p;
+option go_package = "github.com/FraMan97/kairos-p2p-engine/internal/grpc/pb";
+
+service NodeService {
+  rpc SaveChunk (ChunkRequest) returns (ChunkResponse);
+  rpc GetChunk (GetChunkRequest) returns (ChunkData);
+  rpc DeleteChunk (DeleteChunkRequest) returns (ChunkResponse);
+}
+
+message ChunkRequest {
+  string address = 1;
+  bytes public_key = 2;
+  bytes signature = 3;
+  string chunk_id = 4;
+  bytes shard = 5;
+  string release_date = 6;
+}
+
+message ChunkResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetChunkRequest {
+  string chunk_id = 1;
+}
+
+message ChunkData {
+  bytes data = 1;
+}
+
+message DeleteChunkRequest {
+  string chunk_id = 1;
+}

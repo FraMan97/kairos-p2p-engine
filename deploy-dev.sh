@@ -25,6 +25,10 @@ helm upgrade --install kairos-engine ./helm \
   --set nodes.pullPolicy=Never \
   --set explorer.pullPolicy=Never
 
+kubectl rollout restart statefulset/kairos-bootstrap
+kubectl rollout restart statefulset/kairos-node
+kubectl rollout restart deployment/kairos-explorer
+
 # 4. Wait for Kubernetes to finish the job
 echo "Waiting for all pods to be ready (this may take a few seconds)..."
 kubectl rollout status statefulset/kairos-bootstrap --timeout=120s

@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/FraMan97/kairos-p2p-engine/internal/config"
 	"github.com/FraMan97/kairos-p2p-engine/internal/crypto"
 	"github.com/FraMan97/kairos-p2p-engine/internal/database"
+	"github.com/FraMan97/kairos-p2p-engine/internal/grpc/pb"
 	"github.com/FraMan97/kairos-p2p-engine/internal/models"
 	"github.com/corvus-ch/shamir"
 	"github.com/drand/tlock"
@@ -74,11 +77,6 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 	}
 	tlockClient := tlock.New(tNetwork)
 
-	enc, err := reedsolomon.New(config.DataShards, config.ParityShards)
-	if err != nil {
-		return fmt.Errorf("rs error: %v", err)
-	}
-
 	fileManifest := &models.FileManifest{
 		FileName:          header.Filename,
 		FileId:            fileId,
@@ -92,20 +90,30 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 		Split:             make(map[int]models.FileBlock),
 	}
 
+	type cryptoJob struct {
+		blockID int
+		data    []byte
+	}
+
 	type uploadJob struct {
 		chunkReq    models.ChunkRequest
 		targetNodes []string
 	}
-	jobs := make(chan uploadJob, config.TotalShards*2)
-	errChan := make(chan error, 1)
-	var wg sync.WaitGroup
 
-	workerCount := 5
-	for i := 0; i < workerCount; i++ {
-		wg.Add(1)
+	var manifestMutex sync.Mutex
+	cryptoJobs := make(chan cryptoJob, config.TotalShards*2)
+	uploadJobs := make(chan uploadJob, config.TotalShards*4)
+	errChan := make(chan error, 1)
+
+	var cryptoWg sync.WaitGroup
+	var uploadWg sync.WaitGroup
+
+	uploadWorkerCount := 10
+	for i := 0; i < uploadWorkerCount; i++ {
+		uploadWg.Add(1)
 		go func() {
-			defer wg.Done()
-			for job := range jobs {
+			defer uploadWg.Done()
+			for job := range uploadJobs {
 				jsonBytes, err := json.Marshal(job.chunkReq)
 				if err != nil {
 					continue
@@ -115,18 +123,30 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 					continue
 				}
 				job.chunkReq.Signature = signature
-				jsonBytes, _ = json.Marshal(job.chunkReq)
 
 				success := false
 				for _, nodeAddr := range job.targetNodes {
-					resp, err := config.HttpClient.Post(fmt.Sprintf("http://%s/chunk", nodeAddr), "application/json", bytes.NewBuffer(jsonBytes))
-					if err == nil {
-						isOk := resp.StatusCode == 200
-						resp.Body.Close()
-						if isOk {
-							success = true
-							break
-						}
+					conn, err := GetGrpcConnection(nodeAddr)
+					if err != nil {
+						continue
+					}
+
+					client := pb.NewNodeServiceClient(conn)
+
+					req := &pb.ChunkRequest{
+						Address:     job.chunkReq.Address,
+						PublicKey:   job.chunkReq.PublicKey,
+						Signature:   job.chunkReq.Signature,
+						ChunkId:     job.chunkReq.ChunkId,
+						Shard:       job.chunkReq.Shard,
+						ReleaseDate: job.chunkReq.ReleaseDate,
+					}
+
+					res, err := client.SaveChunk(context.Background(), req)
+
+					if err == nil && res.Success {
+						success = true
+						break
 					}
 				}
 				if !success {
@@ -140,11 +160,125 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 		}()
 	}
 
-	buffer := make([]byte, blockSize)
-	blockID := 0
+	cryptoWorkerCount := runtime.NumCPU()
+	if cryptoWorkerCount < 2 {
+		cryptoWorkerCount = 2
+	}
 
+	for i := 0; i < cryptoWorkerCount; i++ {
+		cryptoWg.Add(1)
+		go func() {
+			defer cryptoWg.Done()
+			enc, err := reedsolomon.New(config.DataShards, config.ParityShards)
+			if err != nil {
+				select {
+				case errChan <- fmt.Errorf("rs error: %v", err):
+				default:
+				}
+				return
+			}
+
+			for job := range cryptoJobs {
+				key := crypto.GenerateRandomAESKey()
+				var encryptedKeyBuf bytes.Buffer
+				err := tlockClient.Encrypt(&encryptedKeyBuf, bytes.NewReader(key), drandRound)
+				if err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					continue
+				}
+				encryptedKey := encryptedKeyBuf.Bytes()
+
+				encryptedBlock, err := crypto.EncryptGCM(job.data, key)
+				if err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					continue
+				}
+
+				dataChunks, err := enc.Split(encryptedBlock)
+				if err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					continue
+				}
+				err = enc.Encode(dataChunks)
+				if err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					continue
+				}
+
+				keyParts, err := shamir.Split(encryptedKey, config.TotalShards, config.DataShards)
+				if err != nil {
+					select {
+					case errChan <- err:
+					default:
+					}
+					continue
+				}
+
+				var shamirIndexes []byte
+				for k := range keyParts {
+					shamirIndexes = append(shamirIndexes, k)
+				}
+
+				fileBlock := models.FileBlock{
+					EncryptedBlockSize: len(encryptedBlock),
+					Chunks:             make([]models.Chunk, 0, config.TotalShards),
+				}
+
+				for j := 0; j < config.TotalShards; j++ {
+					payloadDati := dataChunks[j]
+					currentIndex := shamirIndexes[j]
+					rawKeyPart := keyParts[currentIndex]
+
+					selectedNodes := pickRandomItems(nodes, config.ChunksTolerance)
+					chunkId := uuid.New().String()
+
+					chunkMeta := models.Chunk{
+						ShardIndex:   j,
+						KeyIndexPart: currentIndex,
+						KeyPart:      rawKeyPart,
+						Nodes:        selectedNodes,
+						ChunkId:      chunkId,
+					}
+					fileBlock.Chunks = append(fileBlock.Chunks, chunkMeta)
+
+					dataSafe := make([]byte, len(payloadDati))
+					copy(dataSafe, payloadDati)
+
+					uploadJobs <- uploadJob{
+						chunkReq: models.ChunkRequest{
+							Address:     config.AdvertisedAddress + ":" + strconv.Itoa(config.Port),
+							PublicKey:   config.PublicKey,
+							ChunkId:     chunkId,
+							Shard:       dataSafe,
+							ReleaseDate: releaseTime,
+						},
+						targetNodes: selectedNodes,
+					}
+				}
+
+				manifestMutex.Lock()
+				fileManifest.Split[job.blockID] = fileBlock
+				manifestMutex.Unlock()
+			}
+		}()
+	}
+
+	blockID := 0
 	log.Printf("[StreamUpload] - [STEP 3] Starting fragmentation and time-lock encryption loop...")
 	for {
+		buffer := make([]byte, blockSize)
 		n, err := io.ReadFull(file, buffer)
 		if err == io.EOF {
 			break
@@ -153,85 +287,14 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 			buffer = buffer[:n]
 			err = nil
 		} else if err != nil {
-			close(jobs)
+			close(cryptoJobs)
 			return err
 		}
 
-		key := crypto.GenerateRandomAESKey()
-		var encryptedKeyBuf bytes.Buffer
-		err = tlockClient.Encrypt(&encryptedKeyBuf, bytes.NewReader(key), drandRound)
-		if err != nil {
-			close(jobs)
-			return err
+		cryptoJobs <- cryptoJob{
+			blockID: blockID,
+			data:    buffer,
 		}
-		encryptedKey := encryptedKeyBuf.Bytes()
-
-		encryptedBlock, err := crypto.EncryptGCM(buffer, key)
-		if err != nil {
-			close(jobs)
-			return err
-		}
-
-		dataChunks, err := enc.Split(encryptedBlock)
-		if err != nil {
-			close(jobs)
-			return err
-		}
-		err = enc.Encode(dataChunks)
-		if err != nil {
-			close(jobs)
-			return err
-		}
-
-		keyParts, err := shamir.Split(encryptedKey, config.TotalShards, config.DataShards)
-		if err != nil {
-			close(jobs)
-			return err
-		}
-
-		var shamirIndexes []byte
-		for k := range keyParts {
-			shamirIndexes = append(shamirIndexes, k)
-		}
-
-		fileBlock := models.FileBlock{
-			EncryptedBlockSize: len(encryptedBlock),
-			Chunks:             make([]models.Chunk, 0, config.TotalShards),
-		}
-
-		for i := 0; i < config.TotalShards; i++ {
-			payloadDati := dataChunks[i]
-			currentIndex := shamirIndexes[i]
-			rawKeyPart := keyParts[currentIndex]
-
-			selectedNodes := pickRandomItems(nodes, config.ChunksTolerance)
-			chunkId := uuid.New().String()
-
-			chunkMeta := models.Chunk{
-				ShardIndex:   i,
-				KeyIndexPart: currentIndex,
-				KeyPart:      rawKeyPart,
-				Nodes:        selectedNodes,
-				ChunkId:      chunkId,
-			}
-			fileBlock.Chunks = append(fileBlock.Chunks, chunkMeta)
-
-			dataSafe := make([]byte, len(payloadDati))
-			copy(dataSafe, payloadDati)
-
-			jobs <- uploadJob{
-				chunkReq: models.ChunkRequest{
-					Address:     config.AdvertisedAddress + ":" + strconv.Itoa(config.Port),
-					PublicKey:   config.PublicKey,
-					ChunkId:     chunkId,
-					Shard:       dataSafe,
-					ReleaseDate: releaseTime,
-				},
-				targetNodes: selectedNodes,
-			}
-		}
-
-		fileManifest.Split[blockID] = fileBlock
 		blockID++
 
 		if n < blockSize {
@@ -239,9 +302,10 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 		}
 	}
 
-	log.Printf("[StreamUpload] - [STEP 4] Fragmentation complete. Waiting for workers to finish...")
-	close(jobs)
-	wg.Wait()
+	close(cryptoJobs)
+	cryptoWg.Wait()
+	close(uploadJobs)
+	uploadWg.Wait()
 
 	select {
 	case err := <-errChan:
@@ -250,7 +314,7 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 	default:
 	}
 
-	log.Printf("[StreamUpload] - [STEP 5] Finalizing process: Uploading manifest...")
+	log.Printf("[StreamUpload] - [STEP 4] Finalizing process: Uploading manifest...")
 	err = UploadFileManifest(fileManifest)
 	if err != nil {
 		log.Printf("[StreamUpload] - [ERROR] Manifest upload failed: %v", err)
@@ -520,38 +584,34 @@ func GetChunk(r *http.Request) ([]byte, error) {
 	return database.GetData(config.DB, "chunks", chunkId)
 }
 
-func RequestChunk(node string, chunkId string) (*models.ChunkRequest, error) {
-	resp, err := config.HttpClient.Get(fmt.Sprintf("http://%s/chunk?chunkId=%s", node, chunkId))
+func RequestChunk(nodeAddress string, chunkId string) (*models.ChunkRequest, error) {
+	conn, err := GetGrpcConnection(nodeAddress)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 200 {
-		var chunkRequest models.ChunkRequest
-		err := json.NewDecoder(resp.Body).Decode(&chunkRequest)
-		if err != nil {
-			return nil, err
-		}
-		return &chunkRequest, nil
+
+	client := pb.NewNodeServiceClient(conn)
+	res, err := client.GetChunk(context.Background(), &pb.GetChunkRequest{ChunkId: chunkId})
+	if err != nil {
+		return nil, err
 	}
-	body, _ := io.ReadAll(resp.Body)
-	return nil, fmt.Errorf("error: %s", string(body))
+
+	var chunkRequest models.ChunkRequest
+	err = json.Unmarshal(res.Data, &chunkRequest)
+	if err != nil {
+		return nil, err
+	}
+	return &chunkRequest, nil
 }
 
 func RequestChunkDeletion(nodeAddress string, chunkId string) error {
-	url := fmt.Sprintf("http://%s/chunk?id=%s", nodeAddress, chunkId)
-
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	conn, err := GetGrpcConnection(nodeAddress)
 	if err != nil {
-		log.Printf("[GC] Invalid delete request for %s: %v", url, err)
 		return err
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err == nil && resp != nil {
-		resp.Body.Close()
-	}
 
+	client := pb.NewNodeServiceClient(conn)
+	_, err = client.DeleteChunk(context.Background(), &pb.DeleteChunkRequest{ChunkId: chunkId})
 	return err
 }
 

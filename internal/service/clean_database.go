@@ -20,34 +20,30 @@ func CleanNodeDatabase(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			allChunks, err := database.GetAllData(config.DB, "chunks")
-			if err != nil {
-				log.Printf("[GC: NodeDatabase] - [ERROR] Failed to retrieve chunks for cleaning: %v", err)
-				continue
-			}
+			var keysToDelete []string
 
-			if len(allChunks) == 0 {
-				continue
-			}
+			database.IterateAndProcess(config.DB, "chunks", func(key string, val []byte) {
+				var chunk models.ChunkRequest
+				if err := json.NewDecoder(bytes.NewBuffer(val)).Decode(&chunk); err == nil {
+					parsedTime, err := time.Parse(time.RFC3339, chunk.ReleaseDate)
+					if err == nil && time.Now().UTC().After(parsedTime.Add(time.Hour*24*7)) {
+						keysToDelete = append(keysToDelete, chunk.ChunkId)
+					}
+				}
+			})
 
 			removedCount := 0
-			for _, m := range allChunks {
-				var chunk models.ChunkRequest
-				if err := json.NewDecoder(bytes.NewBuffer(m)).Decode(&chunk); err != nil {
-					continue
-				}
-
-				parsedTime, err := time.Parse(time.RFC3339, chunk.ReleaseDate)
-				if err == nil && time.Now().UTC().After(parsedTime.Add(time.Hour*24*7)) {
-					if err := database.DeleteKey(config.DB, "chunks", chunk.ChunkId); err == nil {
-						removedCount++
-					}
+			for _, key := range keysToDelete {
+				if err := database.DeleteKey(config.DB, "chunks", key); err == nil {
+					removedCount++
 				}
 			}
 
 			if removedCount > 0 {
 				log.Printf("[GC: NodeDatabase] - [SUCCESS] Cleanup finished. Removed %d expired chunks", removedCount)
 			}
+
+			database.RunValueLogGC(config.DB)
 
 		case <-ctx.Done():
 			log.Printf("[GC: NodeDatabase] - [INFO] Stopping background worker...")
@@ -64,34 +60,30 @@ func CleanBootstrapDatabase(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			allManifests, err := database.GetAllData(config.DB, "manifests")
-			if err != nil {
-				log.Printf("[GC: BootstrapDatabase] - [ERROR] Failed to retrieve manifests for cleaning: %v", err)
-				continue
-			}
+			var keysToDelete []string
 
-			if len(allManifests) == 0 {
-				continue
-			}
+			database.IterateAndProcess(config.DB, "manifests", func(key string, val []byte) {
+				var manifest models.FileManifest
+				if err := json.NewDecoder(bytes.NewBuffer(val)).Decode(&manifest); err == nil {
+					parsedTime, err := time.Parse(time.RFC3339, manifest.ReleaseDate)
+					if err == nil && time.Now().UTC().After(parsedTime.Add(time.Hour*24*7)) {
+						keysToDelete = append(keysToDelete, manifest.FileId)
+					}
+				}
+			})
 
 			removedCount := 0
-			for _, m := range allManifests {
-				var manifest models.FileManifest
-				if err := json.NewDecoder(bytes.NewBuffer(m)).Decode(&manifest); err != nil {
-					continue
-				}
-
-				parsedTime, err := time.Parse(time.RFC3339, manifest.ReleaseDate)
-				if err == nil && time.Now().UTC().After(parsedTime.Add(time.Hour*24*7)) {
-					if err := database.DeleteKey(config.DB, "manifests", manifest.FileId); err == nil {
-						removedCount++
-					}
+			for _, key := range keysToDelete {
+				if err := database.DeleteKey(config.DB, "manifests", key); err == nil {
+					removedCount++
 				}
 			}
 
 			if removedCount > 0 {
 				log.Printf("[GC: BootstrapDatabase] - [SUCCESS] Cleanup finished. Removed %d expired manifests", removedCount)
 			}
+
+			database.RunValueLogGC(config.DB)
 
 		case <-ctx.Done():
 			log.Printf("[GC: BootstrapDatabase] - [INFO] Stopping background worker...")

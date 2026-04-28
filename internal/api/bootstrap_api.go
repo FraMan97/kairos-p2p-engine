@@ -39,38 +39,67 @@ func SubsribeNode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func SynchronizeData(w http.ResponseWriter, r *http.Request) {
-	log.Printf("[API: SynchronizeData] - [INFO] Sync request received")
-	var receivedData models.SynchronizationRequest
-	json.NewDecoder(r.Body).Decode(&receivedData)
+func SyncDigestHandler(w http.ResponseWriter, r *http.Request) {
+	var digest models.SyncDigest
+	json.NewDecoder(r.Body).Decode(&digest)
 	defer r.Body.Close()
 
-	message, _ := json.Marshal(models.SynchronizationRequest{Address: receivedData.Address, PublicKey: receivedData.PublicKey, ActiveNodes: receivedData.ActiveNodes, FileManifests: receivedData.FileManifests})
-	check, _ := crypto.VerifySignature(message, receivedData.Signature, receivedData.PublicKey)
+	message, _ := json.Marshal(models.SyncDigest{Address: digest.Address, PublicKey: digest.PublicKey, NodeKeys: digest.NodeKeys, ManifestKeys: digest.ManifestKeys})
+	check, _ := crypto.VerifySignature(message, digest.Signature, digest.PublicKey)
+
+	if !check {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	localNodeKeys, _ := database.GetAllKeys(config.DB, "active_nodes")
+	localManifestKeys, _ := database.GetAllKeys(config.DB, "manifests")
+
+	missingNodesInLocal, missingNodesInRemote := service.CompareKeys(localNodeKeys, digest.NodeKeys)
+	missingManifestsInLocal, missingManifestsInRemote := service.CompareKeys(localManifestKeys, digest.ManifestKeys)
+
+	payload := models.SyncPayload{
+		Address:            config.AdvertisedAddress + ":" + strconv.Itoa(config.Port),
+		PublicKey:          config.PublicKey,
+		ActiveNodes:        make(map[string][]byte),
+		FileManifests:      make(map[string][]byte),
+		RequestedNodes:     missingNodesInLocal,
+		RequestedManifests: missingManifestsInLocal,
+	}
+
+	for _, key := range missingNodesInRemote {
+		if data, err := database.GetData(config.DB, "active_nodes", key); err == nil {
+			payload.ActiveNodes[key] = data
+		}
+	}
+
+	for _, key := range missingManifestsInRemote {
+		if data, err := database.GetData(config.DB, "manifests", key); err == nil {
+			payload.FileManifests[key] = data
+		}
+	}
+
+	jsonBytes, _ := json.Marshal(payload)
+	signature, _ := crypto.SignMessage(jsonBytes)
+	payload.Signature = signature
+
+	jsonBytes, _ = json.Marshal(payload)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(jsonBytes)
+}
+
+func SyncPushHandler(w http.ResponseWriter, r *http.Request) {
+	var payload models.SyncPayload
+	json.NewDecoder(r.Body).Decode(&payload)
+	defer r.Body.Close()
+
+	message, _ := json.Marshal(models.SyncPayload{Address: payload.Address, PublicKey: payload.PublicKey, ActiveNodes: payload.ActiveNodes, FileManifests: payload.FileManifests, RequestedNodes: payload.RequestedNodes, RequestedManifests: payload.RequestedManifests})
+	check, _ := crypto.VerifySignature(message, payload.Signature, payload.PublicKey)
 
 	if check {
-		log.Printf("[API: SynchronizeData] - [INFO] Signature valid. Processing sync for node: %s", receivedData.Address)
-		activeNodes, _ := database.GetAllData(config.DB, "active_nodes")
-		fileManifests, _ := database.GetAllData(config.DB, "manifests")
-
-		dataToExchange := models.SynchronizationRequest{
-			Address:       config.AdvertisedAddress + ":" + strconv.Itoa(config.Port),
-			PublicKey:     config.PublicKey,
-			ActiveNodes:   activeNodes,
-			FileManifests: fileManifests,
-		}
-
-		jsonBytes, _ := json.Marshal(dataToExchange)
-		signature, _ := crypto.SignMessage(jsonBytes)
-		dataToExchange.Signature = signature
-
-		jsonBytes, _ = json.Marshal(dataToExchange)
-		go service.ProcessAlignment(dataToExchange, receivedData)
-
-		log.Printf("[API: SynchronizeData] - [SUCCESS] Sync data dispatched to %s", receivedData.Address)
-		w.Write(jsonBytes)
+		go service.ProcessAlignment(payload.ActiveNodes, payload.FileManifests)
+		w.WriteHeader(http.StatusOK)
 	} else {
-		log.Printf("[API: SynchronizeData] - [WARN] Unauthorized sync attempt from %s", receivedData.Address)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
@@ -92,7 +121,7 @@ func RequestNodesForFileUploadAPI(w http.ResponseWriter, r *http.Request) {
 		if len(allDBNodes) <= nodesToPickup {
 			response = allDBNodes
 		} else {
-			response = allDBNodes[:nodesToPickup] // Simple slice for now
+			response = allDBNodes[:nodesToPickup]
 		}
 
 		log.Printf("[API: RequestNodesForFileUpload] - [SUCCESS] Allocated %d nodes for upload to %s", len(response), request.Address)

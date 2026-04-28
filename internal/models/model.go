@@ -6,12 +6,22 @@ type SubscriptionRequest struct {
 	Signature []byte `json:"signature"`
 }
 
-type SynchronizationRequest struct {
-	Address       string            `json:"address"`
-	PublicKey     []byte            `json:"public_key"`
-	ActiveNodes   map[string][]byte `json:"active_nodes"`
-	FileManifests map[string][]byte `json:"chunks"`
-	Signature     []byte            `json:"signature"`
+type SyncDigest struct {
+	Address      string   `json:"address"`
+	PublicKey    []byte   `json:"public_key"`
+	Signature    []byte   `json:"signature"`
+	NodeKeys     []string `json:"node_keys"`
+	ManifestKeys []string `json:"manifest_keys"`
+}
+
+type SyncPayload struct {
+	Address            string            `json:"address"`
+	PublicKey          []byte            `json:"public_key"`
+	Signature          []byte            `json:"signature"`
+	ActiveNodes        map[string][]byte `json:"active_nodes"`
+	FileManifests      map[string][]byte `json:"file_manifests"`
+	RequestedNodes     []string          `json:"requested_nodes"`
+	RequestedManifests []string          `json:"requested_manifests"`
 }
 
 type NodesForFileUploadRequest struct {
