@@ -2,7 +2,7 @@
 echo "Deploying Kairos P2P Engine Alpha..."
 
 helm upgrade --install kairos-engine ./helm \
-  -f ./helm/value-dev.yaml \
+  -f ./helm/values-dev.yaml \
   -f ./helm/values-prod.yaml \
   --namespace production --create-namespace
 
