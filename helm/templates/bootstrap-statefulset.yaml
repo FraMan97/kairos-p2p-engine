@@ -13,6 +13,13 @@ spec:
       labels:
         app: kairos-bootstrap
     spec:
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command: [ "sh", "-c", "chmod -R 777 /data" ]
+          volumeMounts:
+            - name: data
+              mountPath: /data
       containers:
         - name: bootstrap
           image: {{ .Values.bootstrap.image }}

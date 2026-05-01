@@ -23,6 +23,13 @@ spec:
                     values:
                       - kairos-node
               topologyKey: "kubernetes.io/hostname"
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command: [ "sh", "-c", "chmod -R 777 /data" ]
+          volumeMounts:
+            - name: data
+              mountPath: /data
       containers:
         - name: node
           image: {{ .Values.nodes.image }}
