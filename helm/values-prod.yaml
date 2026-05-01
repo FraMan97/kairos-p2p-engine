@@ -1,0 +1,22 @@
+bootstrap:
+  image: ghcr.io/framan97/kairos-bootstrap:latest
+  pullPolicy: Always
+  replicas: 1
+  storage: 2Gi
+  port: 8080
+
+nodes:
+  image: ghcr.io/framan97/kairos-node:latest
+  pullPolicy: Always
+  replicas: 3
+  storage: 20Gi
+  port: 8080
+
+explorer:
+  image: ghcr.io/framan97/kairos-explorer:latest
+  pullPolicy: Always
+  replicas: 1
+  port: 8081
+
+env:
+  BOOTSTRAP_SERVERS: "kairos-bootstrap-0.kairos-bootstrap.production.svc.cluster.local:8080"

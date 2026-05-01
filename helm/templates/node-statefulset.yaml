@@ -15,16 +15,14 @@ spec:
     spec:
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                labelSelector:
-                  matchExpressions:
-                    - key: app
-                      operator: In
-                      values:
-                        - kairos-node
-                topologyKey: "kubernetes.io/hostname"
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - kairos-node
+              topologyKey: "kubernetes.io/hostname"
       containers:
         - name: node
           image: {{ .Values.nodes.image }}
@@ -40,6 +38,8 @@ spec:
                   fieldPath: status.podIP
             - name: BOOTSTRAP_SERVERS
               value: "{{ .Values.env.BOOTSTRAP_SERVERS }}"
+            - name: KAIROS_DB_PATH
+              value: "/data"
           volumeMounts:
             - name: data
               mountPath: /data

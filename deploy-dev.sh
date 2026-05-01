@@ -17,7 +17,7 @@ kind load docker-image kairos-explorer:local --name kairos-vault
 
 # 3. Install the P2P infrastructure with Helm
 echo "Installing Helm Chart..."
-helm upgrade --install kairos-engine ./helm \
+helm upgrade --install kairos-engine -f ./helm/values-dev.yaml ./helm \
   --set bootstrap.image=kairos-bootstrap:local \
   --set nodes.image=kairos-node:local \
   --set explorer.image=kairos-explorer:local \
