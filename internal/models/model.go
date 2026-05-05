@@ -56,6 +56,8 @@ type ChunkRequest struct {
 	PublicKey   []byte `json:"public_key"`
 	Signature   []byte `json:"signature"`
 	ChunkId     string `json:"chunk_id"`
+	FileId      string `json:"file_id"`
+	CreatedAt   int64  `json:"created_at"`
 	Shard       []byte `json:"shard"`
 	ReleaseDate string `json:"release_date"`
 }

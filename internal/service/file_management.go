@@ -101,6 +101,7 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 	}
 
 	var manifestMutex sync.Mutex
+	var successfulUploads sync.Map
 	cryptoJobs := make(chan cryptoJob, config.TotalShards*2)
 	uploadJobs := make(chan uploadJob, config.TotalShards*4)
 	errChan := make(chan error, 1)
@@ -138,6 +139,8 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 						PublicKey:   job.chunkReq.PublicKey,
 						Signature:   job.chunkReq.Signature,
 						ChunkId:     job.chunkReq.ChunkId,
+						FileId:      job.chunkReq.FileId,
+						CreatedAt:   job.chunkReq.CreatedAt,
 						Shard:       job.chunkReq.Shard,
 						ReleaseDate: job.chunkReq.ReleaseDate,
 					}
@@ -146,6 +149,7 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 
 					if err == nil && res.Success {
 						success = true
+						successfulUploads.Store(job.chunkReq.ChunkId, nodeAddr)
 						break
 					}
 				}
@@ -236,6 +240,8 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 					Chunks:             make([]models.Chunk, 0, config.TotalShards),
 				}
 
+				createdAt := time.Now().Unix()
+
 				for j := 0; j < config.TotalShards; j++ {
 					payloadDati := dataChunks[j]
 					currentIndex := shamirIndexes[j]
@@ -261,6 +267,8 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 							Address:     config.AdvertisedAddress + ":" + strconv.Itoa(config.Port),
 							PublicKey:   config.PublicKey,
 							ChunkId:     chunkId,
+							FileId:      fileId,
+							CreatedAt:   createdAt,
 							Shard:       dataSafe,
 							ReleaseDate: releaseTime,
 						},
@@ -309,7 +317,13 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 
 	select {
 	case err := <-errChan:
-		log.Printf("[StreamUpload] - [ERROR] Upload pipeline failed: %v", err)
+		log.Printf("[StreamUpload] - [ERROR] Upload pipeline failed: %v. Initiating active rollback...", err)
+		successfulUploads.Range(func(key, value interface{}) bool {
+			chunkId := key.(string)
+			nodeAddr := value.(string)
+			go RequestChunkDeletion(nodeAddr, chunkId)
+			return true
+		})
 		return fmt.Errorf("upload pipeline failed: %v", err)
 	default:
 	}
@@ -317,7 +331,13 @@ func StreamAndUploadFile(file *os.File, header *multipart.FileHeader, blockSize 
 	log.Printf("[StreamUpload] - [STEP 4] Finalizing process: Uploading manifest...")
 	err = UploadFileManifest(fileManifest)
 	if err != nil {
-		log.Printf("[StreamUpload] - [ERROR] Manifest upload failed: %v", err)
+		log.Printf("[StreamUpload] - [ERROR] Manifest upload failed: %v. Initiating active rollback...", err)
+		successfulUploads.Range(func(key, value interface{}) bool {
+			chunkId := key.(string)
+			nodeAddr := value.(string)
+			go RequestChunkDeletion(nodeAddr, chunkId)
+			return true
+		})
 		return fmt.Errorf("manifest upload failed: %v", err)
 	}
 
@@ -557,7 +577,7 @@ func SaveChunk(r *http.Request) error {
 		return err
 	}
 	defer r.Body.Close()
-	message, err := json.Marshal(models.ChunkRequest{Address: chunkRequest.Address, PublicKey: chunkRequest.PublicKey, ChunkId: chunkRequest.ChunkId, Shard: chunkRequest.Shard, ReleaseDate: chunkRequest.ReleaseDate})
+	message, err := json.Marshal(models.ChunkRequest{Address: chunkRequest.Address, PublicKey: chunkRequest.PublicKey, ChunkId: chunkRequest.ChunkId, FileId: chunkRequest.FileId, CreatedAt: chunkRequest.CreatedAt, Shard: chunkRequest.Shard, ReleaseDate: chunkRequest.ReleaseDate})
 	if err != nil {
 		return err
 	}
@@ -566,7 +586,7 @@ func SaveChunk(r *http.Request) error {
 		return err
 	}
 	if check {
-		payload, err := json.Marshal(models.ChunkRequest{PublicKey: chunkRequest.PublicKey, Address: chunkRequest.Address, ChunkId: chunkRequest.ChunkId, Shard: chunkRequest.Shard, ReleaseDate: chunkRequest.ReleaseDate})
+		payload, err := json.Marshal(models.ChunkRequest{PublicKey: chunkRequest.PublicKey, Address: chunkRequest.Address, ChunkId: chunkRequest.ChunkId, FileId: chunkRequest.FileId, CreatedAt: chunkRequest.CreatedAt, Shard: chunkRequest.Shard, ReleaseDate: chunkRequest.ReleaseDate})
 		if err != nil {
 			return err
 		}

@@ -14,8 +14,10 @@ message ChunkRequest {
   bytes public_key = 2;
   bytes signature = 3;
   string chunk_id = 4;
-  bytes shard = 5;
-  string release_date = 6;
+  string file_id = 5;
+  int64 created_at = 6;
+  bytes shard = 7;
+  string release_date = 8;
 }
 
 message ChunkResponse {

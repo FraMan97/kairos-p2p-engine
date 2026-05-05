@@ -13,7 +13,7 @@ import (
 )
 
 func CleanNodeDatabase(ctx context.Context) {
-	log.Printf("[GC: NodeDatabase] - [INFO] Background worker started. Retention policy: 7 days after release")
+	log.Printf("[GC: NodeDatabase] - [INFO] Background worker started. Retention policy: 7 days after release, orphans after 2 hours")
 	ticker := time.NewTicker(time.Duration(config.CronClean) * time.Second)
 	defer ticker.Stop()
 
@@ -25,9 +25,19 @@ func CleanNodeDatabase(ctx context.Context) {
 			database.IterateAndProcess(config.DB, "chunks", func(key string, val []byte) {
 				var chunk models.ChunkRequest
 				if err := json.NewDecoder(bytes.NewBuffer(val)).Decode(&chunk); err == nil {
+
 					parsedTime, err := time.Parse(time.RFC3339, chunk.ReleaseDate)
 					if err == nil && time.Now().UTC().After(parsedTime.Add(time.Hour*24*7)) {
 						keysToDelete = append(keysToDelete, chunk.ChunkId)
+						return
+					}
+
+					if chunk.CreatedAt > 0 && (time.Now().Unix()-chunk.CreatedAt > 7200) {
+						manifest, err := GetFileManifestFromServer(chunk.FileId)
+						if err != nil || manifest == nil {
+							log.Printf("[GC: NodeDatabase] - [ORPHAN DETECTED] FileId %s not found on Bootstrap. Removing chunk %s", chunk.FileId, chunk.ChunkId)
+							keysToDelete = append(keysToDelete, chunk.ChunkId)
+						}
 					}
 				}
 			})
@@ -40,7 +50,7 @@ func CleanNodeDatabase(ctx context.Context) {
 			}
 
 			if removedCount > 0 {
-				log.Printf("[GC: NodeDatabase] - [SUCCESS] Cleanup finished. Removed %d expired chunks", removedCount)
+				log.Printf("[GC: NodeDatabase] - [SUCCESS] Cleanup finished. Removed %d chunks", removedCount)
 			}
 
 			database.RunValueLogGC(config.DB)

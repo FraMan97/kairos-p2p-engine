@@ -21,6 +21,8 @@ func (s *NodeServer) SaveChunk(ctx context.Context, req *pb.ChunkRequest) (*pb.C
 		Address:     req.Address,
 		PublicKey:   req.PublicKey,
 		ChunkId:     req.ChunkId,
+		FileId:      req.FileId,
+		CreatedAt:   req.CreatedAt,
 		Shard:       req.Shard,
 		ReleaseDate: req.ReleaseDate,
 	})
@@ -37,6 +39,8 @@ func (s *NodeServer) SaveChunk(ctx context.Context, req *pb.ChunkRequest) (*pb.C
 		PublicKey:   req.PublicKey,
 		Address:     req.Address,
 		ChunkId:     req.ChunkId,
+		FileId:      req.FileId,
+		CreatedAt:   req.CreatedAt,
 		Shard:       req.Shard,
 		ReleaseDate: req.ReleaseDate,
 	})
